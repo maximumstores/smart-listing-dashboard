@@ -116,7 +116,7 @@ def get_google_credentials():
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def load_sheet_data(sheet_name: str) -> pd.DataFrame:
-    """Load data from Google Sheets"""
+    """Generic loader for simple sheets (uses first row as header)"""
     try:
         creds = get_google_credentials()
         if not creds:
@@ -188,7 +188,7 @@ def load_config_fresh() -> dict:
 
 @st.cache_data(ttl=300)
 def load_config() -> dict:
-    """Load configuration from Config sheet"""
+    """Load configuration from Config sheet (cached)"""
     try:
         creds = get_google_credentials()
         if not creds:
@@ -210,6 +210,54 @@ def load_config() -> dict:
     except Exception as e:
         st.error(f"❌ Помилка завантаження Config: {e}")
         return {}
+
+@st.cache_data(ttl=300)
+def load_benchmarking_data() -> pd.DataFrame:
+    """
+    Специальный загрузчик для листа Benchmarking.
+    Автоматически находит строку с заголовками (Критерий / Критерій),
+    пропускает декоративные строки и возвращает чистый DataFrame.
+    """
+    try:
+        creds = get_google_credentials()
+        if not creds:
+            return pd.DataFrame()
+
+        client = gspread.authorize(creds)
+        spreadsheet = client.open_by_key(SPREADSHEET_ID)
+        worksheet = spreadsheet.worksheet("Benchmarking")
+
+        raw = worksheet.get_all_values()
+        if not raw:
+            return pd.DataFrame()
+
+        # Найти строку с реальными заголовками
+        header_row_index = None
+        for i, row in enumerate(raw):
+            row_lower = [c.strip().lower() for c in row if c is not None]
+            if any(col in row_lower for col in ["критерий", "критерій"]):
+                header_row_index = i
+                break
+
+        if header_row_index is None:
+            st.error("❌ В листе Benchmarking не найдено колонки 'Критерий' / 'Критерій'.")
+            return pd.DataFrame()
+
+        headers = raw[header_row_index]
+        data_rows = raw[header_row_index + 1:]
+
+        df = pd.DataFrame(data_rows, columns=headers)
+
+        # Удаляем полностью пустые строки (по первой колонке)
+        first_col = headers[0]
+        df[first_col] = df[first_col].astype(str)
+        df = df[df[first_col].str.strip() != ""]
+
+        return df
+
+    except Exception as e:
+        st.error(f"❌ Ошибка загрузки Benchmarking: {e}")
+        return pd.DataFrame()
 
 # ============================================
 # 📊 HELPER FUNCTIONS
@@ -313,19 +361,34 @@ def create_comparison_bar_chart(df: pd.DataFrame, metric_col: str, label_col: st
     
     return fig
 
-def create_benchmarking_chart(df_bench: pd.DataFrame) -> go.Figure:
+def create_benchmarking_chart(df_bench: pd.DataFrame) -> go.Figure | None:
     """Create benchmarking comparison chart"""
     if df_bench.empty:
+        return None
+
+    # Определяем колонку с критерием (RU или UA)
+    crit_col = None
+    if "Критерій" in df_bench.columns:
+        crit_col = "Критерій"
+    elif "Критерий" in df_bench.columns:
+        crit_col = "Критерий"
+    else:
+        return None
+
+    # Фильтруем только реальные критерии (без итоговых строк)
+    mask = ~df_bench[crit_col].astype(str).str.contains("СТАТИСТИКА|ИТОГ|ИТОГО|📊", na=False, case=False)
+    df_bench_filtered = df_bench[mask].copy()
+
+    if df_bench_filtered.empty:
         return None
     
     fig = go.Figure()
     
-    # Extract our scores and competitor scores
-    criteria = df_bench['Критерій'].tolist() if 'Критерій' in df_bench.columns else []
+    criteria = df_bench_filtered[crit_col].tolist()
     our_scores = []
     comp_scores = []
     
-    for _, row in df_bench.iterrows():
+    for _, row in df_bench_filtered.iterrows():
         our_val = parse_score(str(row.get('Мы (Our %)', '0')))
         comp_val = parse_score(str(row.get('Конк #1 (%)', '0')))
         our_scores.append(our_val)
@@ -429,9 +492,8 @@ def main():
     with tab1:
         st.markdown("## 📊 Загальний огляд")
         
-        # Load data
         df_analysis = load_sheet_data("Listing Analysis")
-        df_bench = load_sheet_data("Benchmarking")
+        df_bench = load_benchmarking_data()
         
         if df_analysis.empty:
             st.warning("⚠️ Дані аналізу не знайдено. Запустіть аналіз спочатку.")
@@ -447,7 +509,7 @@ def main():
             elif 'Общая оценка' in df_analysis.columns:
                 avg_score = df_analysis['Общая оценка'].apply(parse_score).mean()
             else:
-                avg_score = 0
+                avg_score = 0.0
             
             # Count by type
             own_count = len(df_analysis[df_analysis.get('Тип', pd.Series()) == 'Собственный']) if 'Тип' in df_analysis.columns else 0
@@ -463,7 +525,6 @@ def main():
                 st.metric("🎯 Конкуренти", comp_count)
             
             with col4:
-                delta_color = "normal" if avg_score >= 70 else "inverse"
                 st.metric("📊 Середня оцінка", f"{avg_score:.1f}%", delta=f"{'✅' if avg_score >= 70 else '⚠️'}")
             
             st.markdown("---")
@@ -497,22 +558,30 @@ def main():
                         df_sorted = df_plot.sort_values('Score', ascending=False)
                         
                         st.markdown("#### 🏆 Топ-5 найкращих")
-                        for i, row in df_sorted.head(5).iterrows():
+                        for _, row in df_sorted.head(5).iterrows():
                             asin = extract_asin(row['ASIN'])
                             score = row['Score']
                             typ = row.get('Тип', 'N/A')
                             emoji = "🏠" if typ == "Собственный" else "🎯"
                             color = get_score_color(score)
-                            st.markdown(f"{emoji} [{asin}]({create_amazon_link(asin)}) - <span style='color:{color}'>{score:.1f}%</span>", unsafe_allow_html=True)
+                            st.markdown(
+                                f"{emoji} [{asin}]({create_amazon_link(asin)}) - "
+                                f"<span style='color:{color}'>{score:.1f}%</span>",
+                                unsafe_allow_html=True
+                            )
                         
                         st.markdown("#### ⚠️ Потребують уваги")
-                        for i, row in df_sorted.tail(3).iterrows():
+                        for _, row in df_sorted.tail(3).iterrows():
                             asin = extract_asin(row['ASIN'])
                             score = row['Score']
                             typ = row.get('Тип', 'N/A')
                             emoji = "🏠" if typ == "Собственный" else "🎯"
                             color = get_score_color(score)
-                            st.markdown(f"{emoji} [{asin}]({create_amazon_link(asin)}) - <span style='color:{color}'>{score:.1f}%</span>", unsafe_allow_html=True)
+                            st.markdown(
+                                f"{emoji} [{asin}]({create_amazon_link(asin)}) - "
+                                f"<span style='color:{color}'>{score:.1f}%</span>",
+                                unsafe_allow_html=True
+                            )
     
     # ========================================
     # TAB 2: LISTING ANALYSIS
@@ -598,51 +667,63 @@ def main():
     with tab3:
         st.markdown("## 🏆 Бенчмаркінг: Ми vs Конкуренти")
         
-        df_bench = load_sheet_data("Benchmarking")
+        df_bench = load_benchmarking_data()
         
         if df_bench.empty:
             st.warning("⚠️ Дані бенчмаркінгу не знайдено.")
         else:
-            # Filter out summary rows
-            df_bench_filtered = df_bench[~df_bench['Критерій'].str.contains('СТАТИСТИКА|ИТОГО|📊', na=False, case=False)]
-            
-            if not df_bench_filtered.empty:
-                # Create comparison chart
-                fig = create_benchmarking_chart(df_bench_filtered)
-                if fig:
-                    st.plotly_chart(fig, use_container_width=True)
+            # Определяем колонку с критерием (RU или UA)
+            crit_col = None
+            if "Критерій" in df_bench.columns:
+                crit_col = "Критерій"
+            elif "Критерий" in df_bench.columns:
+                crit_col = "Критерий"
+
+            if not crit_col:
+                st.error("❌ В Benchmarking нет колонки 'Критерий' / 'Критерій'.")
+            else:
+                # Filter out summary rows
+                df_bench_filtered = df_bench[
+                    ~df_bench[crit_col].astype(str).str.contains('СТАТИСТИКА|ИТОГ|ИТОГО|📊', na=False, case=False)
+                ].copy()
                 
-                # Summary stats
-                st.markdown("### 📊 Підсумок")
-                
-                col1, col2, col3 = st.columns(3)
-                
-                # Calculate wins/losses
-                wins = 0
-                losses = 0
-                
-                for _, row in df_bench_filtered.iterrows():
-                    our = parse_score(str(row.get('Мы (Our %)', '0')))
-                    comp = parse_score(str(row.get('Конк #1 (%)', '0')))
-                    if our > comp:
-                        wins += 1
-                    elif comp > our:
-                        losses += 1
-                
-                with col1:
-                    st.metric("🏆 Ми виграємо", f"{wins} критеріїв")
-                
-                with col2:
-                    st.metric("😔 Ми програємо", f"{losses} критеріїв")
-                
-                with col3:
-                    total = wins + losses
-                    win_rate = (wins / total * 100) if total > 0 else 0
-                    st.metric("📈 Win Rate", f"{win_rate:.1f}%")
-                
-                # Detailed table
-                st.markdown("### 📋 Детальна таблиця")
-                st.dataframe(df_bench_filtered, use_container_width=True, hide_index=True)
+                if not df_bench_filtered.empty:
+                    # Create comparison chart
+                    fig = create_benchmarking_chart(df_bench_filtered)
+                    if fig:
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Summary stats
+                    st.markdown("### 📊 Підсумок")
+                    
+                    col1, col2, col3 = st.columns(3)
+                    
+                    # Calculate wins/losses
+                    wins = 0
+                    losses = 0
+                    
+                    for _, row in df_bench_filtered.iterrows():
+                        our = parse_score(str(row.get('Мы (Our %)', '0')))
+                        comp = parse_score(str(row.get('Конк #1 (%)', '0')))
+                        if our > comp:
+                            wins += 1
+                        elif comp > our:
+                            losses += 1
+                    
+                    with col1:
+                        st.metric("🏆 Ми виграємо", f"{wins} критеріїв")
+                    
+                    with col2:
+                        st.metric("😔 Ми програємо", f"{losses} критеріїв")
+                    
+                    with col3:
+                        total = wins + losses
+                        win_rate = (wins / total * 100) if total > 0 else 0
+                        st.metric("📈 Win Rate", f"{win_rate:.1f}%")
+                    
+                    # Detailed table
+                    st.markdown("### 📋 Детальна таблиця")
+                    st.dataframe(df_bench_filtered, use_container_width=True, hide_index=True)
     
     # ========================================
     # TAB 4: OPTIMIZATION
@@ -725,9 +806,6 @@ def main():
                     if general:
                         st.markdown("### 💡 Загальні рекомендації")
                         st.success(general)
-    
-    # Footer
-    st.markdown("---")
     
     # ========================================
     # TAB 5: ASIN MANAGEMENT
@@ -876,33 +954,34 @@ def main():
         with col3:
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("➕ Додати", key="quick_add_btn"):
-                if quick_asin and len(quick_asin) == 10:
+                if quick_asin and len(quick_asin.strip()) == 10:
+                    q = quick_asin.strip().upper()
                     if "Наш" in asin_type:
-                        if quick_asin not in product_asins:
-                            product_asins.append(quick_asin)
+                        if q not in product_asins:
+                            product_asins.append(q)
                             product_urls_formatted = "__".join([f"https://www.amazon.com/dp/{asin}" for asin in product_asins])
                             if save_to_config("product_urls", product_urls_formatted):
-                                st.success(f"✅ {quick_asin} додано до наших товарів!")
+                                st.success(f"✅ {q} додано до наших товарів!")
                                 st.cache_data.clear()
                                 st.rerun()
                         else:
-                            st.warning(f"⚠️ {quick_asin} вже є в списку")
+                            st.warning(f"⚠️ {q} вже є в списку")
                     else:
-                        if quick_asin not in competitor_asins:
-                            competitor_asins.append(quick_asin)
+                        if q not in competitor_asins:
+                            competitor_asins.append(q)
                             competitor_urls_formatted = "__".join([f"https://www.amazon.com/dp/{asin}" for asin in competitor_asins])
                             if save_to_config("competitor_urls", competitor_urls_formatted):
-                                st.success(f"✅ {quick_asin} додано до конкурентів!")
+                                st.success(f"✅ {q} додано до конкурентів!")
                                 st.cache_data.clear()
                                 st.rerun()
                         else:
-                            st.warning(f"⚠️ {quick_asin} вже є в списку")
+                            st.warning(f"⚠️ {q} вже є в списку")
                 else:
                     st.error("❌ Введіть коректний ASIN (10 символів)")
         
         # Preview links
-        if quick_asin and len(quick_asin) >= 10:
-            st.markdown(f"🔗 [Переглянути на Amazon](https://www.amazon.com/dp/{quick_asin[:10]})")
+        if quick_asin and len(quick_asin.strip()) >= 10:
+            st.markdown(f"🔗 [Переглянути на Amazon](https://www.amazon.com/dp/{quick_asin.strip()[:10]})")
     
     # Footer bottom
     st.markdown("---")
@@ -915,5 +994,7 @@ def main():
     with col3:
         st.caption("Smart Listing AI v2.0 | Merino.tech")
 
+
 if __name__ == "__main__":
     main()
+

@@ -268,13 +268,70 @@ def load_benchmarking_data() -> pd.DataFrame:
 @st.cache_data(ttl=300)
 def load_prompts_sheet(sheet_name: str) -> pd.DataFrame:
     """
-    Load full prompts sheet (Prompt Analysis / Prompt Optimization).
-    Expects columns like:
-    - 'ID промта'
-    - 'Название'
-    - 'Промт для ИИ  - System'
+    Load prompts sheet using raw values (bypasses header duplicates issue)
     """
-    return load_sheet_data(sheet_name)
+    try:
+        creds = get_google_credentials()
+        if not creds:
+            return pd.DataFrame()
+        
+        client = gspread.authorize(creds)
+        spreadsheet = client.open_by_key(SPREADSHEET_ID)
+        worksheet = spreadsheet.worksheet(sheet_name)
+        
+        # Get raw data
+        raw_data = worksheet.get_all_values()
+        
+        if not raw_data:
+            return pd.DataFrame()
+        
+        # Find header row (first non-empty row with "ID" or similar)
+        header_row_idx = 0
+        for i, row in enumerate(raw_data):
+            row_str = ' '.join([str(c).lower() for c in row])
+            if 'id' in row_str or 'промта' in row_str:
+                header_row_idx = i
+                break
+        
+        headers = raw_data[header_row_idx]
+        data_rows = raw_data[header_row_idx + 1:]
+        
+        # Clean headers - remove duplicates
+        cleaned_headers = []
+        header_count = {}
+        
+        for h in headers:
+            h_clean = str(h).strip()
+            
+            # If empty, create placeholder
+            if not h_clean:
+                h_clean = f"Empty_{len(cleaned_headers)}"
+            
+            # Handle duplicates
+            original_h = h_clean
+            counter = 1
+            while h_clean in header_count:
+                h_clean = f"{original_h}_{counter}"
+                counter += 1
+            
+            header_count[h_clean] = True
+            cleaned_headers.append(h_clean)
+        
+        # Create DataFrame
+        df = pd.DataFrame(data_rows, columns=cleaned_headers)
+        
+        # Remove completely empty rows
+        if len(df.columns) > 0:
+            first_col = df.columns[0]
+            df = df[df[first_col].astype(str).str.strip() != ""]
+        
+        return df
+        
+    except Exception as e:
+        st.error(f"❌ Помилка завантаження {sheet_name}: {e}")
+        import traceback
+        st.error(traceback.format_exc())
+        return pd.DataFrame()
 
 def get_prompt_by_id(prompt_id: str, sheet_name: str) -> dict:
     """

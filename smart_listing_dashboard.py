@@ -549,7 +549,7 @@ def main():
         st.image("https://img.icons8.com/clouds/100/amazon.png", width=80)
         st.markdown("### ⚙️ Налаштування")
         
-        # Language selector (пока декоративный, логика может быть добавлена позже)
+        # Language selector
         lang = st.selectbox("🌐 Мова", ["UA", "RU", "EN"], index=0)
         
         # Refresh button
@@ -594,14 +594,14 @@ def main():
             st.caption(f"LITE: {config.get('LITE_MODEL', 'N/A')}")
             st.caption(f"POWER: {config.get('POWER_MODEL', 'N/A')}")
     
-    # Main content tabs
+    # Main content tabs - УКРАЇНСЬКОЮ
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "📊 Огляд",
-        "📈 Listing Analysis", 
-        "🏆 Benchmarking",
-        "🛠️ Optimization",
+        "📈 Аналіз листингів", 
+        "🏆 Бенчмаркінг",
+        "🛠️ Оптимізація",
         "⚙️ Управління ASIN",
-        "✏️ Prompt Editor"
+        "✏️ Редактор промтів"
     ])
     
     # ========================================
@@ -1137,37 +1137,11 @@ def main():
         if quick_asin and len(quick_asin.strip()) >= 10:
             st.markdown(f"🔗 [Переглянути на Amazon](https://www.amazon.com/dp/{quick_asin.strip()[:10]})")
     
-# ============================================
-# 🎯 MAIN DASHBOARD
-# ============================================
-def main():
-    # Header
-    st.markdown('<h1 class="main-header">🎯 Smart Listing AI Dashboard</h1>', unsafe_allow_html=True)
-    st.markdown("**Аналіз та оптимізація Amazon листингів під AI-агентів (Rufus, Cosmo)**")
-    
-    # ... (весь код sidebar залишається)
-    
-    # Main content tabs
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "📊 Огляд",
-        "📈 Listing Analysis", 
-        "🏆 Benchmarking",
-        "🛠️ Optimization",
-        "⚙️ Управління ASIN",
-        "✏️ Prompt Editor"
-    ])
-    
     # ========================================
-    # TAB 1-5 (залишаються без змін)
-    # ========================================
-    
-    # ... весь код TAB 1-5 ...
-    
-    # ========================================
-    # TAB 6: PROMPT EDITOR (ПЕРЕМІЩЕНО ВСЕРЕДИНУ main())
+    # TAB 6: PROMPT EDITOR
     # ========================================
     with tab6:
-        st.markdown("## ✏️ Prompt Editor")
+        st.markdown("## ✏️ Редактор промтів")
         st.caption("Редагуй промти PT000, PT001 та інші — безпосередньо в Dashboard")
 
         # Діагностика - показати всі доступні листи
@@ -1428,7 +1402,7 @@ def main():
                                     key=f"preview_new_{selected_id}"
                                 )
     
-    # Footer (ТАКОЖ ВСЕРЕДИНІ main())
+    # Footer
     st.markdown("---")
     
     col1, col2, col3 = st.columns(3)
@@ -1438,6 +1412,10 @@ def main():
         st.caption("📊 [Google Sheets](https://docs.google.com/spreadsheets/d/1_0WrdwdWthtaMHSAiNy8HqpAsTW9xNStTw7o9JDEWWU)")
     with col3:
         st.caption("Smart Listing AI v2.1 | Merino.tech")
+
+
+if __name__ == "__main__":
+    main()
 
 
 if __name__ == "__main__":

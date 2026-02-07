@@ -1137,196 +1137,270 @@ def main():
         if quick_asin and len(quick_asin.strip()) >= 10:
             st.markdown(f"🔗 [Переглянути на Amazon](https://www.amazon.com/dp/{quick_asin.strip()[:10]})")
     
-    # ========================================
-    # TAB 6: PROMPT EDITOR
-    # ========================================
-    with tab6:
-        st.markdown("## ✏️ Prompt Editor")
-        st.caption("Редагуй промти PT000, PT001 та інші — безпосередньо в Dashboard")
+# ========================================
+# TAB 6: PROMPT EDITOR (з діагностикою)
+# ========================================
+with tab6:
+    st.markdown("## ✏️ Prompt Editor")
+    st.caption("Редагуй промти PT000, PT001 та інші — безпосередньо в Dashboard")
 
-        # Selector for prompt sheet
-        prompt_sheet = st.radio(
-            "📂 Виберіть лист з промтами:",
-            ["Prompt Analysis", "Prompt Optimization"],
-            horizontal=True
-        )
-        
-        # Load selected sheet
-        df_prompts = load_prompts_sheet(prompt_sheet)
-
-        if df_prompts.empty:
-            st.warning(f"⚠️ Лист '{prompt_sheet}' порожній або недоступний.")
-        else:
-            # Detect columns (flexible naming)
-            id_col = None
-            title_col = None
-            system_col = None
-
-            for c in df_prompts.columns:
-                lc = c.lower().strip()
-                if not id_col and ("id" in lc or "промта" in lc):
-                    id_col = c
-                elif not title_col and ("назв" in lc or "name" in lc):
-                    title_col = c
-                elif not system_col and ("system" in lc or "промт для" in lc):
-                    system_col = c
-
-            if not id_col or not system_col:
-                st.error(f"❌ Не знайдено обов'язкові колонки (ID / System Prompt) у листі '{prompt_sheet}'.")
-                st.info(f"Доступні колонки: {', '.join(df_prompts.columns)}")
-            else:
-                # Dropdown to choose prompt
-                prompt_ids = [str(x).strip() for x in df_prompts[id_col].tolist() if str(x).strip()]
+    # Діагностика - показати всі доступні листи
+    with st.expander("🔍 Діагностика: Доступні листи в Google Sheets"):
+        try:
+            creds = get_google_credentials()
+            if creds:
+                client = gspread.authorize(creds)
+                spreadsheet = client.open_by_key(SPREADSHEET_ID)
+                all_sheets = spreadsheet.worksheets()
+                sheet_names = [ws.title for ws in all_sheets]
                 
-                if not prompt_ids:
-                    st.warning("⚠️ Не знайдено жодного ID промта у цьому листі.")
-                else:
-                    selected_id = st.selectbox("🔽 Виберіть промт для редагування:", prompt_ids)
+                st.success(f"✅ Знайдено {len(sheet_names)} листів:")
+                for name in sheet_names:
+                    st.write(f"- {name}")
+            else:
+                st.error("❌ Не вдалося отримати credentials")
+        except Exception as e:
+            st.error(f"❌ Помилка діагностики: {e}")
 
-                    # Find selected row
-                    matching_rows = df_prompts[df_prompts[id_col].astype(str).str.strip() == selected_id]
+    # Отримати список реальних листів для вибору
+    try:
+        creds = get_google_credentials()
+        client = gspread.authorize(creds)
+        spreadsheet = client.open_by_key(SPREADSHEET_ID)
+        all_sheets = spreadsheet.worksheets()
+        available_sheets = [ws.title for ws in all_sheets]
+        
+        # Фільтруємо листи, які можуть містити промти
+        prompt_sheets = [s for s in available_sheets if 'prompt' in s.lower() or 'analysis' in s.lower() or 'optimization' in s.lower()]
+        
+        if not prompt_sheets:
+            st.warning("⚠️ Не знайдено листів з промтами. Показую всі доступні листи.")
+            prompt_sheets = available_sheets
+        
+    except Exception as e:
+        st.error(f"❌ Помилка отримання списку листів: {e}")
+        # Fallback на стандартні назви
+        prompt_sheets = ["Prompt Analysis", "Prompt Optimization"]
+
+    # Selector for prompt sheet
+    prompt_sheet = st.selectbox(
+        "📂 Виберіть лист з промтами:",
+        prompt_sheets,
+        help="Якщо потрібного листа немає, перевірте назву в Google Sheets"
+    )
+    
+    # Load selected sheet
+    df_prompts = load_prompts_sheet(prompt_sheet)
+
+    if df_prompts.empty:
+        st.warning(f"⚠️ Лист '{prompt_sheet}' порожній або недоступний.")
+        
+        # Показати структуру листа для діагностики
+        with st.expander("🔍 Діагностика структури листа"):
+            try:
+                creds = get_google_credentials()
+                client = gspread.authorize(creds)
+                spreadsheet = client.open_by_key(SPREADSHEET_ID)
+                ws = spreadsheet.worksheet(prompt_sheet)
+                raw_data = ws.get_all_values()
+                
+                st.write(f"**Всього рядків:** {len(raw_data)}")
+                if raw_data:
+                    st.write(f"**Перший рядок (заголовки):**")
+                    st.write(raw_data[0])
                     
-                    if matching_rows.empty:
-                        st.error(f"❌ Промт '{selected_id}' не знайдено.")
-                    else:
-                        row = matching_rows.iloc[0]
-
-                        # Current values
-                        name_val = str(row[title_col]) if title_col and title_col in row.index else ""
-                        system_val = str(row[system_col]) if system_col in row.index else ""
-
-                        # Show current info
-                        st.info(f"📋 Редагування: **{selected_id}** {f'({name_val})' if name_val else ''}")
-
-                        # Editable fields
-                        if title_col:
-                            new_name = st.text_input(
-                                "📝 Назва промта",
-                                value=name_val,
-                                key=f"edit_name_{selected_id}"
-                            )
-                        else:
-                            new_name = name_val
+                    if len(raw_data) > 1:
+                        st.write(f"**Другий рядок (приклад даних):**")
+                        st.write(raw_data[1])
                         
-                        new_system = st.text_area(
-                            "🧠 System Prompt",
-                            value=system_val,
-                            height=500,
-                            key=f"edit_system_{selected_id}",
-                            help="Промт може містити до 20,000+ символів"
+                    # Показати DataFrame
+                    st.write("**Попередній перегляд:**")
+                    st.dataframe(pd.DataFrame(raw_data[:10]))
+            except Exception as e:
+                st.error(f"Помилка діагностики: {e}")
+    else:
+        # Detect columns (flexible naming)
+        id_col = None
+        title_col = None
+        system_col = None
+
+        st.write(f"**Знайдені колонки:** {', '.join(df_prompts.columns.tolist())}")
+
+        for c in df_prompts.columns:
+            lc = c.lower().strip()
+            if not id_col and ("id" in lc or "промта" in lc or "код" in lc):
+                id_col = c
+            elif not title_col and ("назв" in lc or "name" in lc or "title" in lc):
+                title_col = c
+            elif not system_col and ("system" in lc or "промт" in lc or "prompt" in lc):
+                system_col = c
+
+        if not id_col:
+            st.error(f"❌ Не знайдено колонку з ID промта")
+            st.info("💡 Очікувані назви колонок: 'ID промта', 'ID', 'Код промта'")
+        elif not system_col:
+            st.error(f"❌ Не знайдено колонку з текстом промта")
+            st.info("💡 Очікувані назви колонок: 'Промт для ІІ - System', 'System Prompt', 'Промт'")
+        else:
+            st.success(f"✅ ID колонка: **{id_col}** | System колонка: **{system_col}**" + (f" | Назва: **{title_col}**" if title_col else ""))
+            
+            # Dropdown to choose prompt
+            prompt_ids = [str(x).strip() for x in df_prompts[id_col].tolist() if str(x).strip()]
+            
+            if not prompt_ids:
+                st.warning("⚠️ Не знайдено жодного ID промта у цьому листі.")
+                st.dataframe(df_prompts[[id_col]], use_container_width=True)
+            else:
+                selected_id = st.selectbox(
+                    "🔽 Виберіть промт для редагування:", 
+                    prompt_ids,
+                    help=f"Всього промтів: {len(prompt_ids)}"
+                )
+
+                # Find selected row
+                matching_rows = df_prompts[df_prompts[id_col].astype(str).str.strip() == selected_id]
+                
+                if matching_rows.empty:
+                    st.error(f"❌ Промт '{selected_id}' не знайдено.")
+                else:
+                    row = matching_rows.iloc[0]
+
+                    # Current values
+                    name_val = str(row[title_col]) if title_col and title_col in row.index else ""
+                    system_val = str(row[system_col]) if system_col in row.index else ""
+
+                    # Show current info
+                    st.info(f"📋 Редагування: **{selected_id}** {f'({name_val})' if name_val else ''}")
+
+                    # Editable fields
+                    if title_col:
+                        new_name = st.text_input(
+                            "📝 Назва промта",
+                            value=name_val,
+                            key=f"edit_name_{selected_id}"
                         )
+                    else:
+                        new_name = name_val
+                    
+                    new_system = st.text_area(
+                        "🧠 System Prompt",
+                        value=system_val,
+                        height=500,
+                        key=f"edit_system_{selected_id}",
+                        help="Промт може містити до 20,000+ символів"
+                    )
 
-                        # Character counter
-                        char_count = len(new_system)
-                        st.caption(f"📊 Довжина промта: {char_count:,} символів")
+                    # Character counter
+                    char_count = len(new_system)
+                    st.caption(f"📊 Довжина промта: {char_count:,} символів")
 
-                        st.markdown("---")
+                    st.markdown("---")
 
-                        # Save button
-                        col1, col2, col3 = st.columns([1, 2, 1])
-                        with col2:
-                            if st.button("💾 Зберегти зміни у Google Sheets", type="primary", use_container_width=True):
-                                try:
-                                    creds = get_google_credentials()
-                                    if not creds:
-                                        st.error("❌ Помилка авторизації Google Sheets")
+                    # Save button
+                    col1, col2, col3 = st.columns([1, 2, 1])
+                    with col2:
+                        if st.button("💾 Зберегти зміни у Google Sheets", type="primary", use_container_width=True):
+                            try:
+                                creds = get_google_credentials()
+                                if not creds:
+                                    st.error("❌ Помилка авторизації Google Sheets")
+                                else:
+                                    client = gspread.authorize(creds)
+                                    spreadsheet = client.open_by_key(SPREADSHEET_ID)
+                                    ws = spreadsheet.worksheet(prompt_sheet)
+
+                                    # Get all data to find row
+                                    all_data = ws.get_all_values()
+                                    
+                                    # Find header row
+                                    header_row_idx = 0
+                                    for idx, row_data in enumerate(all_data):
+                                        if id_col in row_data:
+                                            header_row_idx = idx
+                                            break
+                                    
+                                    headers = all_data[header_row_idx]
+                                    
+                                    # Find column indices
+                                    try:
+                                        id_col_idx = headers.index(id_col)
+                                        system_col_idx = headers.index(system_col)
+                                        title_col_idx = headers.index(title_col) if title_col and title_col in headers else None
+                                    except ValueError as e:
+                                        st.error(f"❌ Помилка: колонку не знайдено - {e}")
+                                        st.stop()
+
+                                    # Find data row
+                                    target_row_idx = None
+                                    for idx in range(header_row_idx + 1, len(all_data)):
+                                        if all_data[idx][id_col_idx].strip() == selected_id:
+                                            target_row_idx = idx
+                                            break
+
+                                    if target_row_idx is None:
+                                        st.error(f"❌ Рядок з ID '{selected_id}' не знайдено")
                                     else:
-                                        client = gspread.authorize(creds)
-                                        spreadsheet = client.open_by_key(SPREADSHEET_ID)
-                                        ws = spreadsheet.worksheet(prompt_sheet)
-
-                                        # Get all data to find row
-                                        all_data = ws.get_all_values()
+                                        # Update cells (gspread uses 1-based indexing)
+                                        row_num = target_row_idx + 1
                                         
-                                        # Find header row
-                                        header_row_idx = 0
-                                        for idx, row_data in enumerate(all_data):
-                                            if id_col in row_data:
-                                                header_row_idx = idx
-                                                break
+                                        # Update system prompt
+                                        ws.update_cell(row_num, system_col_idx + 1, new_system)
                                         
-                                        headers = all_data[header_row_idx]
+                                        # Update title if exists
+                                        if title_col_idx is not None and new_name:
+                                            ws.update_cell(row_num, title_col_idx + 1, new_name)
                                         
-                                        # Find column indices
-                                        try:
-                                            id_col_idx = headers.index(id_col)
-                                            system_col_idx = headers.index(system_col)
-                                            title_col_idx = headers.index(title_col) if title_col in headers else None
-                                        except ValueError as e:
-                                            st.error(f"❌ Помилка: колонку не знайдено - {e}")
-                                            st.stop()
+                                        st.success("✅ Промт успішно оновлено в Google Sheets!")
+                                        st.balloons()
+                                        
+                                        # Clear cache to reload fresh data
+                                        st.cache_data.clear()
+                                        
+                                        # Show what was updated
+                                        with st.expander("📝 Деталі оновлення"):
+                                            st.write(f"**ID:** {selected_id}")
+                                            if title_col_idx is not None:
+                                                st.write(f"**Назва:** {new_name}")
+                                            st.write(f"**Довжина промта:** {len(new_system):,} символів")
+                                            st.write(f"**Лист:** {prompt_sheet}")
+                                            st.write(f"**Рядок:** {row_num}")
 
-                                        # Find data row
-                                        target_row_idx = None
-                                        for idx in range(header_row_idx + 1, len(all_data)):
-                                            if all_data[idx][id_col_idx].strip() == selected_id:
-                                                target_row_idx = idx
-                                                break
+                            except Exception as e:
+                                st.error(f"❌ Помилка збереження: {e}")
+                                import traceback
+                                with st.expander("🔍 Технічні деталі помилки"):
+                                    st.code(traceback.format_exc())
 
-                                        if target_row_idx is None:
-                                            st.error(f"❌ Рядок з ID '{selected_id}' не знайдено")
-                                        else:
-                                            # Update cells (gspread uses 1-based indexing)
-                                            row_num = target_row_idx + 1
-                                            
-                                            # Update system prompt
-                                            ws.update_cell(row_num, system_col_idx + 1, new_system)
-                                            
-                                            # Update title if exists
-                                            if title_col_idx is not None and new_name:
-                                                ws.update_cell(row_num, title_col_idx + 1, new_name)
-                                            
-                                            st.success("✅ Промт успішно оновлено в Google Sheets!")
-                                            st.balloons()
-                                            
-                                            # Clear cache to reload fresh data
-                                            st.cache_data.clear()
-                                            
-                                            # Show what was updated
-                                            with st.expander("📝 Деталі оновлення"):
-                                                st.write(f"**ID:** {selected_id}")
-                                                if title_col_idx is not None:
-                                                    st.write(f"**Назва:** {new_name}")
-                                                st.write(f"**Довжина промта:** {len(new_system):,} символів")
-                                                st.write(f"**Лист:** {prompt_sheet}")
-                                                st.write(f"**Рядок:** {row_num}")
-
-                                except Exception as e:
-                                    st.error(f"❌ Помилка збереження: {e}")
-                                    import traceback
-                                    with st.expander("🔍 Технічні деталі помилки"):
-                                        st.code(traceback.format_exc())
-
-                        # Preview comparison
-                        if new_system != system_val or (title_col and new_name != name_val):
-                            st.markdown("---")
-                            st.markdown("### 🔄 Порівняння змін")
-                            
-                            col1, col2 = st.columns(2)
-                            
-                            with col1:
-                                st.markdown("**🔴 Оригінал**")
-                                if title_col and name_val != new_name:
-                                    st.caption(f"Назва: {name_val}")
-                                st.text_area(
-                                    "Оригінальний промт",
-                                    value=system_val[:1000] + ("..." if len(system_val) > 1000 else ""),
-                                    height=200,
-                                    disabled=True,
-                                    key=f"preview_old_{selected_id}"
-                                )
-                            
-                            with col2:
-                                st.markdown("**🟢 Нова версія**")
-                                if title_col and name_val != new_name:
-                                    st.caption(f"Назва: {new_name}")
-                                st.text_area(
-                                    "Оновлений промт",
-                                    value=new_system[:1000] + ("..." if len(new_system) > 1000 else ""),
-                                    height=200,
-                                    disabled=True,
-                                    key=f"preview_new_{selected_id}"
-                                )
+                    # Preview comparison
+                    if new_system != system_val or (title_col and new_name != name_val):
+                        st.markdown("---")
+                        st.markdown("### 🔄 Порівняння змін")
+                        
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.markdown("**🔴 Оригінал**")
+                            if title_col and name_val != new_name:
+                                st.caption(f"Назва: {name_val}")
+                            st.text_area(
+                                "Оригінальний промт",
+                                value=system_val[:1000] + ("..." if len(system_val) > 1000 else ""),
+                                height=200,
+                                disabled=True,
+                                key=f"preview_old_{selected_id}"
+                            )
+                        
+                        with col2:
+                            st.markdown("**🟢 Нова версія**")
+                            if title_col and name_val != new_name:
+                                st.caption(f"Назва: {new_name}")
+                            st.text_area(
+                                "Оновлений промт",
+                                value=new_system[:1000] + ("..." if len(new_system) > 1000 else ""),
+                                height=200,
+                                disabled=True,
+                                key=f"preview_new_{selected_id}"
+                            )
 
     # Footer
     st.markdown("---")

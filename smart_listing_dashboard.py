@@ -7,6 +7,7 @@ Features:
 - Interactive charts with Plotly
 - Benchmarking comparison
 - ASIN input for new analysis
+- View & manage AI master prompts (PT000 / PT001) from Google Sheets
 """
 
 import streamlit as st
@@ -116,7 +117,7 @@ def get_google_credentials():
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def load_sheet_data(sheet_name: str) -> pd.DataFrame:
-    """Generic loader for simple sheets (uses first row as header)"""
+    """Generic loader for simple sheets (uses first row as header via get_all_records)"""
     try:
         creds = get_google_credentials()
         if not creds:
@@ -260,6 +261,63 @@ def load_benchmarking_data() -> pd.DataFrame:
         return pd.DataFrame()
 
 # ============================================
+# 🤖 PROMPTS: Prompt Analysis / Prompt Optimization
+# ============================================
+
+@st.cache_data(ttl=300)
+def load_prompts_sheet(sheet_name: str) -> pd.DataFrame:
+    """
+    Load full prompts sheet (Prompt Analysis / Prompt Optimization).
+    Expects columns like:
+    - 'ID промта'
+    - 'Название'
+    - 'Промт для ИИ  - System'
+    """
+    return load_sheet_data(sheet_name)
+
+def get_prompt_by_id(prompt_id: str, sheet_name: str) -> dict:
+    """
+    Return a single prompt dict: {id, name, system_prompt} or {} if not found.
+    """
+    df = load_prompts_sheet(sheet_name)
+    if df.empty:
+        return {}
+
+    # Нормализуем названия колонок, чтобы не зависеть от регистров/пробелов
+    cols = {c.strip(): c for c in df.columns}
+    id_col = None
+    text_col = None
+    name_col = None
+
+    for cand in ["ID промта", "ID", "Id промта"]:
+        if cand in cols:
+            id_col = cols[cand]
+            break
+
+    for cand in ["Промт для ИИ  - System", "Промт для ИИ - System", "Prompt System", "System"]:
+        if cand in cols:
+            text_col = cols[cand]
+            break
+
+    for cand in ["Название", "Name", "Название промта"]:
+        if cand in cols:
+            name_col = cols[cand]
+            break
+
+    if not id_col or not text_col:
+        return {}
+
+    for _, row in df.iterrows():
+        if str(row[id_col]).strip() == prompt_id:
+            return {
+                "id": str(row[id_col]).strip(),
+                "name": str(row[name_col]).strip() if name_col else "",
+                "system_prompt": str(row[text_col]).strip()
+            }
+
+    return {}
+
+# ============================================
 # 📊 HELPER FUNCTIONS
 # ============================================
 def parse_score(score_str: str) -> float:
@@ -303,8 +361,9 @@ def create_score_radar_chart(scores: dict, title: str = "Оцінки листи
     values = list(scores.values())
     
     # Close the radar chart
-    categories = categories + [categories[0]]
-    values = values + [values[0]]
+    if categories:
+        categories = categories + [categories[0]]
+        values = values + [values[0]]
     
     fig = go.Figure()
     
@@ -389,28 +448,28 @@ def create_benchmarking_chart(df_bench: pd.DataFrame) -> go.Figure | None:
     comp_scores = []
     
     for _, row in df_bench_filtered.iterrows():
-        our_val = parse_score(str(row.get('Мы (Our %)', '0')))
-        comp_val = parse_score(str(row.get('Конк #1 (%)', '0')))
+        our_val = parse_score(str(row.get("Мы (Our %)", "0")))
+        comp_val = parse_score(str(row.get("Конк #1 (%)", "0")))
         our_scores.append(our_val)
         comp_scores.append(comp_val)
     
     fig.add_trace(go.Bar(
-        name='🏠 Наші товари',
+        name="🏠 Наші товари",
         x=criteria,
         y=our_scores,
-        marker_color='#667eea'
+        marker_color="#667eea"
     ))
     
     fig.add_trace(go.Bar(
-        name='🎯 Конкуренти',
+        name="🎯 Конкуренти",
         x=criteria,
         y=comp_scores,
-        marker_color='#ff6b6b'
+        marker_color="#ff6b6b"
     ))
     
     fig.update_layout(
         title="📊 Порівняння: Ми vs Конкуренти",
-        barmode='group',
+        barmode="group",
         xaxis=dict(tickangle=-45),
         yaxis=dict(title="Оцінка %", range=[0, 105]),
         height=500,
@@ -432,7 +491,7 @@ def main():
         st.image("https://img.icons8.com/clouds/100/amazon.png", width=80)
         st.markdown("### ⚙️ Налаштування")
         
-        # Language selector
+        # Language selector (пока декоративный, логика может быть добавлена позже)
         lang = st.selectbox("🌐 Мова", ["UA", "RU", "EN"], index=0)
         
         # Refresh button
@@ -449,8 +508,8 @@ def main():
         
         # Last update time from data
         df_check = load_sheet_data("Listing Analysis")
-        if not df_check.empty and 'Дата анализа' in df_check.columns:
-            last_date = df_check['Дата анализа'].iloc[-1] if len(df_check) > 0 else "N/A"
+        if not df_check.empty and "Дата анализа" in df_check.columns:
+            last_date = df_check["Дата анализа"].iloc[-1] if len(df_check) > 0 else "N/A"
             st.caption(f"Останнє оновлення: {last_date}")
         
         st.markdown("---")
@@ -477,13 +536,15 @@ def main():
             st.caption(f"LITE: {config.get('LITE_MODEL', 'N/A')}")
             st.caption(f"POWER: {config.get('POWER_MODEL', 'N/A')}")
     
-    # Main content tabs
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    # Main content tabs (добавили 2 новых: Prompt Analysis, Prompt Optimization)
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "📊 Огляд",
         "📈 Listing Analysis", 
         "🏆 Benchmarking",
         "🛠️ Optimization",
-        "⚙️ Управління ASIN"
+        "⚙️ Управління ASIN",
+        "🤖 Prompt Analysis",
+        "✨ Prompt Optimization"
     ])
     
     # ========================================
@@ -504,16 +565,16 @@ def main():
             total_products = len(df_analysis)
             
             # Calculate average overall score
-            if 'Загальна оцінка' in df_analysis.columns:
-                avg_score = df_analysis['Загальна оцінка'].apply(parse_score).mean()
-            elif 'Общая оценка' in df_analysis.columns:
-                avg_score = df_analysis['Общая оценка'].apply(parse_score).mean()
+            if "Загальна оцінка" in df_analysis.columns:
+                avg_score = df_analysis["Загальна оцінка"].apply(parse_score).mean()
+            elif "Общая оценка" in df_analysis.columns:
+                avg_score = df_analysis["Общая оценка"].apply(parse_score).mean()
             else:
                 avg_score = 0.0
             
             # Count by type
-            own_count = len(df_analysis[df_analysis.get('Тип', pd.Series()) == 'Собственный']) if 'Тип' in df_analysis.columns else 0
-            comp_count = len(df_analysis[df_analysis.get('Тип', pd.Series()) == 'Конкурент']) if 'Тип' in df_analysis.columns else 0
+            own_count = len(df_analysis[df_analysis.get("Тип", pd.Series()) == "Собственный"]) if "Тип" in df_analysis.columns else 0
+            comp_count = len(df_analysis[df_analysis.get("Тип", pd.Series()) == "Конкурент"]) if "Тип" in df_analysis.columns else 0
             
             with col1:
                 st.metric("📦 Всього товарів", total_products)
@@ -530,23 +591,23 @@ def main():
             st.markdown("---")
             
             # Quick comparison chart
-            if not df_analysis.empty and 'Тип' in df_analysis.columns:
+            if not df_analysis.empty and "Тип" in df_analysis.columns:
                 col1, col2 = st.columns(2)
                 
                 with col1:
                     # Score distribution
-                    score_col = 'Загальна оцінка' if 'Загальна оцінка' in df_analysis.columns else 'Общая оценка'
+                    score_col = "Загальна оцінка" if "Загальна оцінка" in df_analysis.columns else "Общая оценка"
                     if score_col in df_analysis.columns:
                         df_plot = df_analysis.copy()
-                        df_plot['Score'] = df_plot[score_col].apply(parse_score)
-                        df_plot['ASIN_clean'] = df_plot['ASIN'].apply(extract_asin)
+                        df_plot["Score"] = df_plot[score_col].apply(parse_score)
+                        df_plot["ASIN_clean"] = df_plot["ASIN"].apply(extract_asin)
                         
                         fig = px.bar(
                             df_plot, 
-                            x='ASIN_clean', 
-                            y='Score',
-                            color='Тип',
-                            color_discrete_map={'Собственный': '#667eea', 'Конкурент': '#ff6b6b'},
+                            x="ASIN_clean", 
+                            y="Score",
+                            color="Тип",
+                            color_discrete_map={"Собственный": "#667eea", "Конкурент": "#ff6b6b"},
                             title="📊 Загальні оцінки по ASIN"
                         )
                         fig.update_layout(xaxis_tickangle=-45, height=400)
@@ -555,13 +616,13 @@ def main():
                 with col2:
                     # Top/Bottom performers
                     if score_col in df_analysis.columns:
-                        df_sorted = df_plot.sort_values('Score', ascending=False)
+                        df_sorted = df_plot.sort_values("Score", ascending=False)
                         
                         st.markdown("#### 🏆 Топ-5 найкращих")
                         for _, row in df_sorted.head(5).iterrows():
-                            asin = extract_asin(row['ASIN'])
-                            score = row['Score']
-                            typ = row.get('Тип', 'N/A')
+                            asin = extract_asin(row["ASIN"])
+                            score = row["Score"]
+                            typ = row.get("Тип", "N/A")
                             emoji = "🏠" if typ == "Собственный" else "🎯"
                             color = get_score_color(score)
                             st.markdown(
@@ -572,9 +633,9 @@ def main():
                         
                         st.markdown("#### ⚠️ Потребують уваги")
                         for _, row in df_sorted.tail(3).iterrows():
-                            asin = extract_asin(row['ASIN'])
-                            score = row['Score']
-                            typ = row.get('Тип', 'N/A')
+                            asin = extract_asin(row["ASIN"])
+                            score = row["Score"]
+                            typ = row.get("Тип", "N/A")
                             emoji = "🏠" if typ == "Собственный" else "🎯"
                             color = get_score_color(score)
                             st.markdown(
@@ -595,12 +656,12 @@ def main():
             st.warning("⚠️ Дані аналізу не знайдено.")
         else:
             # ASIN selector
-            asin_list = df_analysis['ASIN'].apply(extract_asin).tolist()
+            asin_list = df_analysis["ASIN"].apply(extract_asin).tolist()
             selected_asin = st.selectbox("🔍 Виберіть ASIN для детального аналізу", asin_list)
             
             if selected_asin:
                 # Filter data for selected ASIN
-                row = df_analysis[df_analysis['ASIN'].apply(extract_asin) == selected_asin].iloc[0]
+                row = df_analysis[df_analysis["ASIN"].apply(extract_asin) == selected_asin].iloc[0]
                 
                 col1, col2 = st.columns([1, 2])
                 
@@ -608,14 +669,14 @@ def main():
                     st.markdown(f"### 📦 {selected_asin}")
                     st.markdown(f"[🔗 Відкрити на Amazon]({create_amazon_link(selected_asin)})")
                     
-                    typ = row.get('Тип', 'N/A')
+                    typ = row.get("Тип", "N/A")
                     st.markdown(f"**Тип:** {'🏠 Власний' if typ == 'Собственный' else '🎯 Конкурент'}")
                     
-                    brand = row.get('Бренд', 'N/A')
+                    brand = row.get("Бренд", "N/A")
                     st.markdown(f"**Бренд:** {brand}")
                     
                     # Show title
-                    title = row.get('Название товара', row.get('Заголовок (Title)', 'N/A'))
+                    title = row.get("Название товара", row.get("Заголовок (Title)", "N/A"))
                     if title and len(str(title)) > 5:
                         with st.expander("📝 Заголовок"):
                             st.write(title)
@@ -623,15 +684,15 @@ def main():
                 with col2:
                     # Radar chart with scores
                     score_mapping = {
-                        'Заголовок': 'Оценка заголовка',
-                        'Буллети': 'Оценка буллетов',
-                        'Опис': 'Оценка описания',
-                        'Зображення': 'Оценка изображений',
-                        'Q&A': 'Оценка Q&A',
-                        'Відгуки': 'Оценка отзывов',
-                        'A+': 'Оценка A+ контента',
-                        'Ціна': 'Оценка цены',
-                        'Keywords': 'Оценка ключевых слов'
+                        "Заголовок": "Оценка заголовка",
+                        "Буллети": "Оценка буллетов",
+                        "Опис": "Оценка описания",
+                        "Зображення": "Оценка изображений",
+                        "Q&A": "Оценка Q&A",
+                        "Відгуки": "Оценка отзывов",
+                        "A+": "Оценка A+ контента",
+                        "Ціна": "Оценка цены",
+                        "Keywords": "Оценка ключевых слов"
                     }
                     
                     scores = {}
@@ -646,20 +707,34 @@ def main():
                 # Detailed scores table
                 st.markdown("### 📋 Детальні оцінки")
                 
-                all_score_cols = [col for col in row.index if 'оценка' in col.lower() or 'score' in col.lower()]
+                all_score_cols = [col for col in row.index if "оценка" in col.lower() or "score" in col.lower()]
                 
                 if all_score_cols:
                     scores_data = []
                     for col in all_score_cols:
                         score_val = parse_score(str(row[col]))
                         scores_data.append({
-                            'Параметр': col.replace('Оценка ', '').replace('_score', ''),
-                            'Оцінка': f"{score_val:.1f}%",
-                            'Статус': '✅' if score_val >= 80 else '⚠️' if score_val >= 60 else '❌'
+                            "Параметр": col.replace("Оценка ", "").replace("_score", ""),
+                            "Оцінка": f"{score_val:.1f}%",
+                            "Статус": "✅" if score_val >= 80 else "⚠️" if score_val >= 60 else "❌"
                         })
                     
                     df_scores = pd.DataFrame(scores_data)
                     st.dataframe(df_scores, use_container_width=True, hide_index=True)
+
+                st.markdown("---")
+                st.markdown("### 🤖 Master Prompt PT000 (Listing Analysis)")
+                pt000 = get_prompt_by_id("PT000", "Prompt Analysis")
+                if not pt000:
+                    st.error("PT000 не знайдено в листі 'Prompt Analysis'. Перевір, що колонка 'ID промта' = PT000.")
+                else:
+                    st.markdown(f"**ID:** `{pt000['id']}` &nbsp;&nbsp; **Назва:** {pt000['name']}")
+                    st.text_area(
+                        "System Prompt (read-only, редагується у Google Sheets)",
+                        pt000["system_prompt"],
+                        height=350,
+                        disabled=True
+                    )
     
     # ========================================
     # TAB 3: BENCHMARKING
@@ -684,7 +759,7 @@ def main():
             else:
                 # Filter out summary rows
                 df_bench_filtered = df_bench[
-                    ~df_bench[crit_col].astype(str).str.contains('СТАТИСТИКА|ИТОГ|ИТОГО|📊', na=False, case=False)
+                    ~df_bench[crit_col].astype(str).str.contains("СТАТИСТИКА|ИТОГ|ИТОГО|📊", na=False, case=False)
                 ].copy()
                 
                 if not df_bench_filtered.empty:
@@ -703,8 +778,8 @@ def main():
                     losses = 0
                     
                     for _, row in df_bench_filtered.iterrows():
-                        our = parse_score(str(row.get('Мы (Our %)', '0')))
-                        comp = parse_score(str(row.get('Конк #1 (%)', '0')))
+                        our = parse_score(str(row.get("Мы (Our %)", "0")))
+                        comp = parse_score(str(row.get("Конк #1 (%)", "0")))
                         if our > comp:
                             wins += 1
                         elif comp > our:
@@ -737,13 +812,13 @@ def main():
             st.warning("⚠️ Дані оптимізації не знайдено.")
         else:
             # ASIN selector
-            asin_list = df_opt['ASIN'].apply(extract_asin).tolist() if 'ASIN' in df_opt.columns else []
+            asin_list = df_opt["ASIN"].apply(extract_asin).tolist() if "ASIN" in df_opt.columns else []
             
             if asin_list:
                 selected_asin = st.selectbox("🔍 Виберіть ASIN", asin_list, key="opt_asin")
                 
                 if selected_asin:
-                    row = df_opt[df_opt['ASIN'].apply(extract_asin) == selected_asin].iloc[0]
+                    row = df_opt[df_opt["ASIN"].apply(extract_asin) == selected_asin].iloc[0]
                     
                     st.markdown(f"### 📦 Рекомендації для [{selected_asin}]({create_amazon_link(selected_asin)})")
                     
@@ -752,14 +827,14 @@ def main():
                         col1, col2 = st.columns(2)
                         with col1:
                             st.markdown("**Оригінал:**")
-                            orig_title = row.get('Оригинальный Title', row.get('Заголовок (Title)', 'N/A'))
+                            orig_title = row.get("Оригинальный Title", row.get("Заголовок (Title)", "N/A"))
                             st.text_area("", orig_title, height=100, key="orig_title", disabled=True)
                         with col2:
                             st.markdown("**Оптимізований:**")
-                            opt_title = row.get('Оптимизированный Title', 'N/A')
+                            opt_title = row.get("Оптимизированный Title", "N/A")
                             st.text_area("", opt_title, height=100, key="opt_title", disabled=True)
                         
-                        rationale = row.get('Рекомендации и улучшения Title', row.get('Рекомендації Title', ''))
+                        rationale = row.get("Рекомендации и улучшения Title", row.get("Рекомендації Title", ""))
                         if rationale:
                             st.info(f"💡 {rationale}")
                     
@@ -768,17 +843,17 @@ def main():
                         col1, col2 = st.columns(2)
                         with col1:
                             st.markdown("**Оригінал:**")
-                            orig_bullets = row.get('Оригинальные Bullets', 'N/A')
+                            orig_bullets = row.get("Оригинальные Bullets", "N/A")
                             st.text_area("", str(orig_bullets)[:2000], height=200, key="orig_bullets", disabled=True)
                         with col2:
                             st.markdown("**Оптимізовані:**")
-                            opt_bullets = row.get('Оптимизированные Bullets', 'N/A')
+                            opt_bullets = row.get("Оптимизированные Bullets", "N/A")
                             st.text_area("", str(opt_bullets)[:2000], height=200, key="opt_bullets", disabled=True)
                     
                     # Images recommendations
                     with st.expander("📸 Зображення"):
-                        img_analysis = row.get('Анализ изображений', row.get('AI анализ изображений', ''))
-                        img_recs = row.get('Рекомендации по изображениям', '')
+                        img_analysis = row.get("Анализ изображений", row.get("AI анализ изображений", ""))
+                        img_recs = row.get("Рекомендации по изображениям", "")
                         
                         if img_analysis:
                             st.markdown("**AI Аналіз:**")
@@ -790,8 +865,8 @@ def main():
                     
                     # Keywords
                     with st.expander("🔑 Ключові слова"):
-                        orig_kw = row.get('Оригинальные Keywords', 'N/A')
-                        opt_kw = row.get('Оптимизированные Keywords', 'N/A')
+                        orig_kw = row.get("Оригинальные Keywords", "N/A")
+                        opt_kw = row.get("Оптимизированные Keywords", "N/A")
                         
                         col1, col2 = st.columns(2)
                         with col1:
@@ -802,10 +877,24 @@ def main():
                             st.text_area("", str(opt_kw)[:1500], height=150, key="opt_kw", disabled=True)
                     
                     # General recommendations
-                    general = row.get('Общий комментарий по оптимизации', '')
+                    general = row.get("Общий комментарий по оптимизации", "")
                     if general:
                         st.markdown("### 💡 Загальні рекомендації")
                         st.success(general)
+
+                st.markdown("---")
+                st.markdown("### ✨ Master Prompt PT001 (Listing Optimization)")
+                pt001 = get_prompt_by_id("PT001", "Prompt Optimization")
+                if not pt001:
+                    st.error("PT001 не знайдено в листі 'Prompt Optimization'. Перевір, що колонка 'ID промта' = PT001.")
+                else:
+                    st.markdown(f"**ID:** `{pt001['id']}` &nbsp;&nbsp; **Назва:** {pt001['name']}")
+                    st.text_area(
+                        "System Prompt (read-only, редагується у Google Sheets)",
+                        pt001["system_prompt"],
+                        height=400,
+                        disabled=True
+                    )
     
     # ========================================
     # TAB 5: ASIN MANAGEMENT
@@ -834,9 +923,9 @@ def main():
                 return []
             asins = []
             # Split by common delimiters
-            parts = urls_str.replace('\n', ',').replace('__', ',').split(',')
+            parts = urls_str.replace("\n", ",").replace("__", ",").split(",")
             for part in parts:
-                match = re.search(r'([A-Z0-9]{10})', part.strip())
+                match = re.search(r"([A-Z0-9]{10})", part.strip())
                 if match:
                     asins.append(match.group(1))
             return list(set(asins))  # Remove duplicates
@@ -891,12 +980,20 @@ def main():
         st.markdown("---")
         
         # Save button
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
+        col1, col2_col, col3 = st.columns([1, 2, 1])
+        with col2_col:
             if st.button("💾 Зберегти зміни в Config", use_container_width=True, type="primary"):
                 # Parse new ASINs
-                new_products = [a.strip() for a in product_text.replace(',', '\n').split('\n') if a.strip() and len(a.strip()) == 10]
-                new_competitors = [a.strip() for a in competitor_text.replace(',', '\n').split('\n') if a.strip() and len(a.strip()) == 10]
+                new_products = [
+                    a.strip().upper()
+                    for a in product_text.replace(",", "\n").split("\n")
+                    if a.strip() and len(a.strip()) == 10
+                ]
+                new_competitors = [
+                    a.strip().upper()
+                    for a in competitor_text.replace(",", "\n").split("\n")
+                    if a.strip() and len(a.strip()) == 10
+                ]
                 
                 # Format as Amazon URLs with __ separator (як в твоєму Config)
                 product_urls_formatted = "__".join([f"https://www.amazon.com/dp/{asin}" for asin in new_products]) if new_products else ""
@@ -911,7 +1008,7 @@ def main():
                     success = False
                 
                 if save_to_config("competitor_urls", competitor_urls_formatted):
-                    st.success(f"✅ Збережено {len(new_competitors)} ASIN конкурентів")
+                    st.success(f"✅ Збережено {len(new_compетitors)} ASIN конкурентів")
                 else:
                     success = False
                 
@@ -983,6 +1080,76 @@ def main():
         if quick_asin and len(quick_asin.strip()) >= 10:
             st.markdown(f"🔗 [Переглянути на Amazon](https://www.amazon.com/dp/{quick_asin.strip()[:10]})")
     
+    # ========================================
+    # TAB 6: PROMPT ANALYSIS (PT000 + другие)
+    # ========================================
+    with tab6:
+        st.markdown("## 🤖 Prompt Analysis (AI Scoring Prompts)")
+        st.caption("Лист Google Sheets: `Prompt Analysis`. Тут живут PT000 и другие промты для аналізу листингів.")
+
+        df_pa = load_prompts_sheet("Prompt Analysis")
+        if df_pa.empty:
+            st.warning("⚠️ Лист 'Prompt Analysis' порожній або не знайдений.")
+        else:
+            # Покажем списком все промты
+            cols_display = [c for c in df_pa.columns if c in ["ID промта", "Название"]]
+            if cols_display:
+                st.markdown("### 📋 Список промтів")
+                st.dataframe(df_pa[cols_display], use_container_width=True, hide_index=True)
+            else:
+                st.dataframe(df_pa, use_container_width=True, hide_index=True)
+
+            # Отдельный блок для PT000
+            st.markdown("---")
+            st.markdown("### 🎯 Мастер-промт PT000 (для оцінки 17 компонентів)")
+            pt000 = get_prompt_by_id("PT000", "Prompt Analysis")
+            if not pt000:
+                st.error("PT000 не знайдено. Перевір, що в колонці 'ID промта' є рядок PT000.")
+            else:
+                st.markdown(f"**ID:** `{pt000['id']}`")
+                st.markdown(f"**Назва:** {pt000['name']}")
+                st.text_area(
+                    "System Prompt (PT000)",
+                    pt000["system_prompt"],
+                    height=450,
+                    disabled=True
+                )
+                st.info("✏️ Щоб змінити цей промт, редагуй його безпосередньо у Google Sheets → лист 'Prompt Analysis'.")
+
+    # ========================================
+    # TAB 7: PROMPT OPTIMIZATION (PT001 + другие)
+    # ========================================
+    with tab7:
+        st.markdown("## ✨ Prompt Optimization (Listing 3.0, Rufus AI)")
+        st.caption("Лист Google Sheets: `Prompt Optimization`. Тут живет PT001 — мастер-промт для повної оптимізації листингу.")
+
+        df_po = load_prompts_sheet("Prompt Optimization")
+        if df_po.empty:
+            st.warning("⚠️ Лист 'Prompt Optimization' порожній або не знайдений.")
+        else:
+            cols_display = [c for c in df_po.columns if c in ["ID промта", "Название"]]
+            if cols_display:
+                st.markdown("### 📋 Список промтів")
+                st.dataframe(df_po[cols_display], use_container_width=True, hide_index=True)
+            else:
+                st.dataframe(df_po, use_container_width=True, hide_index=True)
+
+            st.markdown("---")
+            st.markdown("### 🧠 Мастер-промт PT001 (повна оптимізація листингу під Rufus / Cosmo)")
+            pt001 = get_prompt_by_id("PT001", "Prompt Optimization")
+            if not pt001:
+                st.error("PT001 не знайдено. Перевір, що в колонці 'ID промта' є рядок PT001.")
+            else:
+                st.markdown(f"**ID:** `{pt001['id']}`")
+                st.markdown(f"**Назва:** {pt001['name']}")
+                st.text_area(
+                    "System Prompt (PT001)",
+                    pt001["system_prompt"],
+                    height=600,
+                    disabled=True
+                )
+                st.info("✏️ Редагування PT001 виконується у Google Sheets → лист 'Prompt Optimization'.")
+
     # Footer bottom
     st.markdown("---")
     
@@ -997,4 +1164,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

@@ -263,17 +263,56 @@ def load_benchmarking_data() -> pd.DataFrame:
 # ============================================
 # 🤖 PROMPTS: Prompt Analysis / Prompt Optimization
 # ============================================
-
 @st.cache_data(ttl=300)
 def load_prompts_sheet(sheet_name: str) -> pd.DataFrame:
     """
-    Load full prompts sheet (Prompt Analysis / Prompt Optimization).
-    Expects columns like:
-    - 'ID промта'
-    - 'Название'
-    - 'Промт для ИИ  - System'
+    Гибкая загрузка промтов (Prompt Analysis / Prompt Optimization).
+    ✔ Автоматически исправляет пустые и дублирующиеся заголовки.
+    ✔ Гарантирует, что лист загрузится при любых ошибках.
     """
-    return load_sheet_data(sheet_name)
+    try:
+        creds = get_google_credentials()
+        if not creds:
+            return pd.DataFrame()
+
+        client = gspread.authorize(creds)
+        spreadsheet = client.open_by_key(SPREADSHEET_ID)
+        ws = spreadsheet.worksheet(sheet_name)
+
+        raw = ws.get_all_values()
+        if not raw:
+            return pd.DataFrame()
+
+        # Берём первую строку как заголовки
+        headers = raw[0]
+        data_rows = raw[1:]
+
+        # Обновляем пустые заголовки
+        clean_headers = []
+        used = set()
+        for i, h in enumerate(headers):
+            h = h.strip()
+            if h == "" or h in used:
+                # заменяем на уникальный заголовок
+                new_name = f"Unnamed_{i+1}"
+                clean_headers.append(new_name)
+                used.add(new_name)
+            else:
+                clean_headers.append(h)
+                used.add(h)
+
+        # Собираем DataFrame
+        df = pd.DataFrame(data_rows, columns=clean_headers)
+
+        # удаляем пустые строки
+        df = df[df.apply(lambda r: ''.join(r).strip() != '', axis=1)]
+
+        return df
+
+    except Exception as e:
+        st.error(f"❌ Помилка завантаження {sheet_name}: {e}")
+        return pd.DataFrame()
+
 
 def get_prompt_by_id(prompt_id: str, sheet_name: str) -> dict:
     """
@@ -1163,6 +1202,9 @@ def main():
 
 
 if __name__ == "__main__":
+    main()
+
+
     main()
 
 

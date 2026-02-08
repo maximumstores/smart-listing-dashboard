@@ -1269,33 +1269,34 @@ def main():
                                     id_col_idx = 0
                                 if system_col_idx is None:
                                     system_col_idx = 2 if len(headers) > 2 else 1
-                                        # Find data row with this ID
-                                        target_row = None
-                                        for idx in range(header_row_idx + 1, len(all_data)):
-                                            if all_data[idx][id_col_idx].strip() == prompt_id:
-                                                target_row = idx + 1  # 1-based
-                                                break
-                                        
-                                        if target_row is None:
-                                            st.error(f"❌ Рядок з ID '{prompt_id}' не знайдено")
-                                        else:
-                                            # Update the cell
-                                            ws.update_cell(target_row, system_col_idx + 1, new_prompt)
-                                            
-                                            st.success(f"✅ Промт {prompt_id} успішно оновлено!")
-                                            st.balloons()
-                                            
-                                            # Clear cache
-                                            st.cache_data.clear()
-                                            
-                                            # Show details
-                                            with st.expander("📝 Деталі оновлення"):
-                                                st.write(f"**ID:** {prompt_id}")
-                                                st.write(f"**Лист:** {sheet_name}")
-                                                st.write(f"**Рядок:** {target_row}")
-                                                st.write(f"**Колонка:** {system_col_idx + 1}")
-                                                st.write(f"**Довжина:** {len(new_prompt):,} символів")
-                                                st.write(f"**Змінено:** {abs(len(new_prompt) - len(prompt_data['system_prompt']))} символів")
+                                
+                                # Find data row with this ID
+                                target_row = None
+                                for idx in range(header_row_idx + 1, len(all_data)):
+                                    if all_data[idx][id_col_idx].strip() == prompt_id:
+                                        target_row = idx + 1  # 1-based
+                                        break
+                                
+                                if target_row is None:
+                                    st.error(f"❌ Рядок з ID '{prompt_id}' не знайдено")
+                                else:
+                                    # Update the cell
+                                    ws.update_cell(target_row, system_col_idx + 1, new_prompt)
+                                    
+                                    st.success(f"✅ Промт {prompt_id} успішно оновлено!")
+                                    st.balloons()
+                                    
+                                    # Clear cache
+                                    st.cache_data.clear()
+                                    
+                                    # Show details
+                                    with st.expander("📝 Деталі оновлення"):
+                                        st.write(f"**ID:** {prompt_id}")
+                                        st.write(f"**Лист:** {sheet_name}")
+                                        st.write(f"**Рядок:** {target_row}")
+                                        st.write(f"**Колонка:** {system_col_idx + 1}")
+                                        st.write(f"**Довжина:** {len(new_prompt):,} символів")
+                                        st.write(f"**Змінено:** {abs(len(new_prompt) - len(prompt_data['system_prompt']))} символів")
                         
                         except Exception as e:
                             st.error(f"❌ Помилка збереження: {e}")

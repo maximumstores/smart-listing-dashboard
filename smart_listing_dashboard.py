@@ -269,6 +269,10 @@ def get_prompt_by_id(prompt_id: str, sheet_name: str) -> dict:
     """
     Load a specific prompt by ID from sheet
     Returns: {id, name, system_prompt} or {}
+    
+    Expected structure:
+    Row 1: "1", "Название", "Промт для ИИ - System"
+    Row 2: "PT001", "Name text", "Prompt text"
     """
     try:
         creds = get_google_credentials()
@@ -281,52 +285,81 @@ def get_prompt_by_id(prompt_id: str, sheet_name: str) -> dict:
         
         # Get all raw data
         raw_data = worksheet.get_all_values()
-        if not raw_data:
+        if not raw_data or len(raw_data) < 2:
             return {}
         
-        # Find header row (containing "ID" and "промт")
+        # Find header row - should contain "Название" or "Промт"
         header_row_idx = None
-        for idx, row in enumerate(raw_data):
+        for idx, row in enumerate(raw_data[:5]):  # Check first 5 rows
             row_str = ' '.join([str(c).lower() for c in row])
-            if 'id' in row_str and 'промт' in row_str:
+            if 'назв' in row_str or 'промт' in row_str or 'system' in row_str:
                 header_row_idx = idx
                 break
         
         if header_row_idx is None:
-            return {}
+            # Try simple structure: assume row 0 = headers, row 1+ = data
+            header_row_idx = 0
         
         headers = raw_data[header_row_idx]
         
-        # Find column indices
-        id_col_idx = None
+        # Smart column detection with fallbacks
+        id_col_idx = 0  # Always first column for ID
         name_col_idx = None
         system_col_idx = None
         
         for i, h in enumerate(headers):
             h_lower = str(h).lower().strip()
-            if 'id' in h_lower and 'промт' in h_lower:
-                id_col_idx = i
-            elif 'назв' in h_lower or 'name' in h_lower:
+            
+            # Name column - look for "название" or "name"
+            if 'назв' in h_lower or 'name' in h_lower or 'название' in h_lower:
                 name_col_idx = i
-            elif 'system' in h_lower or ('промт' in h_lower and 'іі' in h_lower):
+            
+            # System prompt column - look for "промт", "system", or "ии"
+            if 'system' in h_lower or 'промт' in h_lower or 'prompt' in h_lower:
                 system_col_idx = i
         
-        if id_col_idx is None or system_col_idx is None:
-            return {}
+        # Fallback: assume standard structure [ID, Name, System]
+        if name_col_idx is None and len(headers) > 1:
+            name_col_idx = 1
+        if system_col_idx is None:
+            # Try last column or third column
+            if len(headers) > 2:
+                system_col_idx = 2
+            else:
+                system_col_idx = len(headers) - 1
         
-        # Search for matching row
-        for row in raw_data[header_row_idx + 1:]:
-            if len(row) > id_col_idx and str(row[id_col_idx]).strip() == prompt_id:
-                return {
+        # Search for matching row by ID in first column
+        for row_idx, row in enumerate(raw_data[header_row_idx + 1:], start=header_row_idx + 1):
+            if not row or len(row) == 0:
+                continue
+            
+            row_id = str(row[id_col_idx]).strip()
+            
+            # Check if this row contains our prompt_id
+            if row_id == prompt_id or prompt_id in row_id:
+                result = {
                     "id": prompt_id,
-                    "name": str(row[name_col_idx]).strip() if name_col_idx and len(row) > name_col_idx else "",
-                    "system_prompt": str(row[system_col_idx]).strip() if len(row) > system_col_idx else ""
+                    "name": "",
+                    "system_prompt": ""
                 }
+                
+                # Extract name
+                if name_col_idx is not None and len(row) > name_col_idx:
+                    result["name"] = str(row[name_col_idx]).strip()
+                
+                # Extract system prompt
+                if system_col_idx is not None and len(row) > system_col_idx:
+                    result["system_prompt"] = str(row[system_col_idx]).strip()
+                
+                return result
         
         return {}
         
     except Exception as e:
-        st.error(f"❌ Помилка завантаження промта: {e}")
+        st.error(f"❌ Помилка завантаження промта {prompt_id} з листа '{sheet_name}': {e}")
+        import traceback
+        st.error(f"📍 Деталі: {traceback.format_exc()[:500]}")
+        return {}
         return {}
 
 # ============================================
@@ -1203,31 +1236,39 @@ def main():
                                 
                                 # Find header row
                                 header_row_idx = None
-                                for idx, row in enumerate(all_data):
+                                for idx, row in enumerate(all_data[:5]):
                                     row_str = ' '.join([str(c).lower() for c in row])
-                                    if 'id' in row_str and 'промт' in row_str:
+                                    if 'назв' in row_str or 'промт' in row_str or 'system' in row_str:
                                         header_row_idx = idx
                                         break
                                 
                                 if header_row_idx is None:
-                                    st.error("❌ Не знайдено рядок з заголовками")
-                                else:
-                                    headers = all_data[header_row_idx]
+                                    header_row_idx = 0
+                                
+                                headers = all_data[header_row_idx]
+                                
+                                # Find ID and System columns using smart detection
+                                id_col_idx = None
+                                system_col_idx = None
+                                
+                                for i, h in enumerate(headers):
+                                    h_lower = str(h).lower().strip()
                                     
-                                    # Find ID and System columns
-                                    id_col_idx = None
-                                    system_col_idx = None
+                                    # Name column detection
+                                    if 'назв' in h_lower or 'name' in h_lower:
+                                        # ID is usually before Name
+                                        if id_col_idx is None and i > 0:
+                                            id_col_idx = i - 1
                                     
-                                    for i, h in enumerate(headers):
-                                        h_lower = str(h).lower().strip()
-                                        if 'id' in h_lower and 'промт' in h_lower:
-                                            id_col_idx = i
-                                        elif 'system' in h_lower or ('промт' in h_lower and 'іі' in h_lower):
-                                            system_col_idx = i
-                                    
-                                    if id_col_idx is None or system_col_idx is None:
-                                        st.error(f"❌ Не знайдено потрібні колонки: ID={id_col_idx}, System={system_col_idx}")
-                                    else:
+                                    # System column detection
+                                    if 'system' in h_lower or ('промт' in h_lower and ('іі' in h_lower or 'ии' in h_lower)):
+                                        system_col_idx = i
+                                
+                                # Fallback to standard structure
+                                if id_col_idx is None:
+                                    id_col_idx = 0
+                                if system_col_idx is None:
+                                    system_col_idx = 2 if len(headers) > 2 else 1
                                         # Find data row with this ID
                                         target_row = None
                                         for idx in range(header_row_idx + 1, len(all_data)):

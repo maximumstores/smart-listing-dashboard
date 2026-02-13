@@ -101,26 +101,47 @@ def get_google_credentials():
         st.error(f"❌ Помилка авторизації: {e}")
         return None
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=900)  # 15 хвилин замість 5
 def load_sheet_data(sheet_name: str) -> pd.DataFrame:
     """Generic loader for simple sheets"""
-    try:
-        creds = get_google_credentials()
-        if not creds:
-            return pd.DataFrame()
-        
-        client = gspread.authorize(creds)
-        spreadsheet = client.open_by_key(SPREADSHEET_ID)
-        worksheet = spreadsheet.worksheet(sheet_name)
-        
-        data = worksheet.get_all_records()
-        if not data:
-            return pd.DataFrame()
-        
-        return pd.DataFrame(data)
-    except Exception as e:
-        st.error(f"❌ Помилка завантаження {sheet_name}: {e}")
-        return pd.DataFrame()
+    import time
+    max_retries = 3
+    retry_delay = 2  # секунди
+    
+    for attempt in range(max_retries):
+        try:
+            creds = get_google_credentials()
+            if not creds:
+                return pd.DataFrame()
+            
+            client = gspread.authorize(creds)
+            spreadsheet = client.open_by_key(SPREADSHEET_ID)
+            worksheet = spreadsheet.worksheet(sheet_name)
+            
+            data = worksheet.get_all_records()
+            if not data:
+                return pd.DataFrame()
+            
+            return pd.DataFrame(data)
+            
+        except Exception as e:
+            error_msg = str(e)
+            
+            # Якщо це помилка 429 (quota exceeded)
+            if "429" in error_msg or "Quota exceeded" in error_msg:
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (2 ** attempt)  # Експоненційний backoff
+                    st.warning(f"⏳ Ліміт запитів. Чекаю {wait_time} сек... (спроба {attempt + 1}/{max_retries})")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    st.error(f"❌ Перевищено ліміт Google Sheets API. Зачекайте 1 хвилину.")
+                    return pd.DataFrame()
+            else:
+                st.error(f"❌ Помилка завантаження {sheet_name}: {e}")
+                return pd.DataFrame()
+    
+    return pd.DataFrame()
 
 # ============================================
 # 🆕 ПОКРАЩЕНІ ФУНКЦІЇ ДЛЯ CONFIG
@@ -159,29 +180,49 @@ def save_to_config(key: str, value: str, verbose: bool = False) -> bool:
 
 def load_config_fresh() -> dict:
     """Load configuration from Config sheet (no cache)"""
-    try:
-        creds = get_google_credentials()
-        if not creds:
-            return {}
-        
-        client = gspread.authorize(creds)
-        spreadsheet = client.open_by_key(SPREADSHEET_ID)
-        worksheet = spreadsheet.worksheet("Config")
-        
-        data = worksheet.get_all_records()
-        config = {}
-        for row in data:
-            key = str(row.get("Key", "")).strip()
-            value = str(row.get("Value", "")).strip()
-            if key:
-                config[key] = value
-        
-        return config
-    except Exception as e:
-        st.error(f"❌ Помилка завантаження Config: {e}")
-        return {}
+    import time
+    max_retries = 3
+    retry_delay = 2
+    
+    for attempt in range(max_retries):
+        try:
+            creds = get_google_credentials()
+            if not creds:
+                return {}
+            
+            client = gspread.authorize(creds)
+            spreadsheet = client.open_by_key(SPREADSHEET_ID)
+            worksheet = spreadsheet.worksheet("Config")
+            
+            data = worksheet.get_all_records()
+            config = {}
+            for row in data:
+                key = str(row.get("Key", "")).strip()
+                value = str(row.get("Value", "")).strip()
+                if key:
+                    config[key] = value
+            
+            return config
+            
+        except Exception as e:
+            error_msg = str(e)
+            
+            if "429" in error_msg or "Quota exceeded" in error_msg:
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (2 ** attempt)
+                    st.warning(f"⏳ Ліміт запитів. Чекаю {wait_time} сек...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    st.error(f"❌ Перевищено ліміт Google Sheets API. Зачекайте 1 хвилину.")
+                    return {}
+            else:
+                st.error(f"❌ Помилка завантаження Config: {e}")
+                return {}
+    
+    return {}
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=900)  # 15 хвилин
 def load_config() -> dict:
     """Load configuration from Config sheet (cached)"""
     return load_config_fresh()
@@ -266,7 +307,7 @@ def diagnose_config_sheet():
     except Exception as e:
         st.error(f"❌ Помилка: {e}")
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=900)  # 15 хвилин
 def load_benchmarking_data() -> pd.DataFrame:
     """Load Benchmarking sheet"""
     try:
@@ -950,8 +991,8 @@ def main():
         
         st.markdown("---")
         
-        # Завантаження поточних даних
-        current_config = load_config_fresh()
+        # Завантаження поточних даних (З КЕШЕМ!)
+        current_config = load_config()  # Використовуємо кеш замість fresh
         
         current_products = current_config.get("product_urls", "")
         current_competitors = current_config.get("competitor_urls", "")
@@ -1078,10 +1119,9 @@ def main():
                     if success:
                         st.balloons()
                         st.success("🎉 Всі зміни збережено в Config!")
-                        st.cache_data.clear()
-                        import time
-                        time.sleep(1)
-                        st.rerun()
+                        st.info("ℹ️ Дані оновляться автоматично через 15 хвилин або натисніть '🔄 Оновити' в Sidebar")
+                        # НЕ очищуємо кеш автоматично - це викликає багато запитів
+                        # Користувач може оновити вручну кнопкою в Sidebar
         
         # QUICK ADD
         st.markdown("---")
@@ -1117,8 +1157,7 @@ def main():
                         formatted = format_asins_for_config(product_asins)
                         if save_to_config("product_urls", formatted):
                             st.success(f"✅ {q} додано!")
-                            st.cache_data.clear()
-                            st.rerun()
+                            st.info("ℹ️ Оновіть сторінку (F5) або натисніть '🔄 Оновити' щоб побачити зміни")
                     else:
                         st.warning(f"⚠️ {q} вже є")
                 else:
@@ -1127,8 +1166,7 @@ def main():
                         formatted = format_asins_for_config(competitor_asins)
                         if save_to_config("competitor_urls", formatted):
                             st.success(f"✅ {q} додано!")
-                            st.cache_data.clear()
-                            st.rerun()
+                            st.info("ℹ️ Оновіть сторінку (F5) або натисніть '🔄 Оновити' щоб побачити зміни")
                     else:
                         st.warning(f"⚠️ {q} вже є")
         

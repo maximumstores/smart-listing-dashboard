@@ -227,8 +227,33 @@ def load_config() -> dict:
     """Load configuration from Config sheet (cached)"""
     return load_config_fresh()
 
+def extract_asin_from_input(input_str: str) -> str | None:
+    """
+    Витягує ASIN з будь-якого формату:
+    - B07W95FP6S (чистий ASIN)
+    - www.amazon.com/dp/B07W95FP6S
+    - https://www.amazon.com/dp/B07W95FP6S
+    - https://amazon.com/dp/B07W95FP6S
+    
+    Returns: ASIN (10 символів) або None
+    """
+    if not input_str:
+        return None
+    
+    # Шукаємо 10-символьний ASIN (букви та цифри)
+    match = re.search(r'([A-Z0-9]{10})', input_str.strip().upper())
+    if match:
+        asin = match.group(1)
+        # Додаткова перевірка що це дійсно ASIN (тільки букви та цифри)
+        if asin.isalnum():
+            return asin
+    
+    return None
+
 def validate_asin(asin: str) -> bool:
-    """Validate ASIN format"""
+    """Validate ASIN format (10 alphanumeric characters)"""
+    if not asin:
+        return False
     asin = asin.strip().upper()
     return len(asin) == 10 and asin.isalnum()
 
@@ -978,8 +1003,9 @@ def main():
         
         st.info("""
         🔄 **Як це працює:**
-        - Введіть ASIN тут → вони зберігаються в Google Sheets **Config**
-        - Ключі: `product_urls` та `competitor_urls`
+        - Введіть ASIN в будь-якому форматі (чистий ASIN, URL, посилання)
+        - Dashboard автоматично витягне ASIN і збереже в Config
+        - Підтримує: `B07W95FP6S`, `www.amazon.com/dp/B07W95FP6S`, `https://amazon.com/dp/...`
         - Скрипт автоматично підхоплює нові ASIN
         - Результати з'являються через 5-10 хвилин
         """)
@@ -1016,11 +1042,11 @@ def main():
             st.markdown("### 🏠 Наші ASIN")
             
             product_text = st.text_area(
-                "ASIN (кожен з нового рядка)",
+                "ASIN (будь-який формат)",
                 value="\n".join(product_asins),
                 height=200,
                 key="edit_product_asins",
-                help="10 символів, великі літери та цифри"
+                help="Введіть ASIN, URL або посилання. Приклади:\nB07W95FP6S\nwww.amazon.com/dp/B07W95FP6S\nhttps://amazon.com/dp/B07W95FP6S"
             )
             
             current_cat_product = current_config.get("Category_product", "")
@@ -1034,10 +1060,11 @@ def main():
             st.markdown("### 🎯 ASIN Конкурентів")
             
             competitor_text = st.text_area(
-                "ASIN конкурентів",
+                "ASIN конкурентів (будь-який формат)",
                 value="\n".join(competitor_asins),
                 height=200,
-                key="edit_competitor_asins"
+                key="edit_competitor_asins",
+                help="ASIN, URL або посилання Amazon"
             )
             
             current_cat_competitor = current_config.get("Category_competitor", "")
@@ -1054,30 +1081,36 @@ def main():
         with col2:
             if st.button("💾 Зберегти в Config", use_container_width=True, type="primary"):
                 with st.spinner("🔄 Зберігаю..."):
-                    # Валідація
+                    # Валідація та витягування ASIN з будь-якого формату
                     new_products = []
                     invalid_products = []
                     
                     for line in product_text.replace(",", "\n").split("\n"):
-                        asin = line.strip().upper()
-                        if not asin:
+                        if not line.strip():
                             continue
-                        if validate_asin(asin):
+                        
+                        # Витягуємо ASIN з будь-якого формату (чистий ASIN, URL, тощо)
+                        asin = extract_asin_from_input(line)
+                        
+                        if asin:
                             new_products.append(asin)
                         else:
-                            invalid_products.append(asin)
+                            invalid_products.append(line.strip())
                     
                     new_competitors = []
                     invalid_competitors = []
                     
                     for line in competitor_text.replace(",", "\n").split("\n"):
-                        asin = line.strip().upper()
-                        if not asin:
+                        if not line.strip():
                             continue
-                        if validate_asin(asin):
+                        
+                        # Витягуємо ASIN з будь-якого формату
+                        asin = extract_asin_from_input(line)
+                        
+                        if asin:
                             new_competitors.append(asin)
                         else:
-                            invalid_competitors.append(asin)
+                            invalid_competitors.append(line.strip())
                     
                     # Видалення дублікатів
                     new_products = list(dict.fromkeys(new_products))
@@ -1131,10 +1164,10 @@ def main():
         
         with col1:
             quick_asin = st.text_input(
-                "ASIN",
-                placeholder="B08HSD4FNW",
+                "ASIN або URL",
+                placeholder="B07W95FP6S або amazon.com/dp/B07W95FP6S",
                 key="quick_add_asin",
-                max_chars=10
+                help="Можна вводити ASIN або повний URL Amazon"
             )
         
         with col2:
@@ -1146,10 +1179,13 @@ def main():
         
         with col3:
             st.markdown("<br>", unsafe_allow_html=True)
-            add_disabled = not quick_asin or not validate_asin(quick_asin)
+            
+            # Витягуємо ASIN з введеного тексту (може бути URL або чистий ASIN)
+            extracted_asin = extract_asin_from_input(quick_asin) if quick_asin else None
+            add_disabled = not extracted_asin
             
             if st.button("➕ Додати", disabled=add_disabled):
-                q = quick_asin.strip().upper()
+                q = extracted_asin  # Вже витягнутий та валідований ASIN
                 
                 if "Наш" in asin_type:
                     if q not in product_asins:
@@ -1170,8 +1206,12 @@ def main():
                     else:
                         st.warning(f"⚠️ {q} вже є")
         
-        if quick_asin and len(quick_asin) >= 10:
-            st.markdown(f"🔗 [Amazon](https://www.amazon.com/dp/{quick_asin[:10]})")
+        if quick_asin:
+            extracted = extract_asin_from_input(quick_asin)
+            if extracted:
+                st.markdown(f"🔗 [Переглянути {extracted} на Amazon](https://www.amazon.com/dp/{extracted})")
+            else:
+                st.warning("⚠️ ASIN не розпізнано. Перевірте формат.")
         
         # CURRENT STATE
         st.markdown("---")
